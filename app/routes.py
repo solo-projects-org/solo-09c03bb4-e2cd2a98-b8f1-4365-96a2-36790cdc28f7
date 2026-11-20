@@ -47,6 +47,9 @@ def _snapshot() -> dict:
         "latest_month": rows[-1]["month"] if rows else None,
         "uploads": db.recent_uploads(conn, 12),
         "demo_enabled": current_app.config["DEMO_ENABLED"],
+        "cache_stale": bool(rows and rows[0].get("cache_stale")),
+        "cache_generation": db.get_meta(conn, "cache_generation"),
+        "cache_version": db.get_meta(conn, "cache_version"),
     }
 
 
@@ -65,6 +68,30 @@ def too_large(_err):
 def healthz():
     _conn().execute("SELECT 1")
     return {"status": "ok"}
+
+
+@bp.post("/rebuild")
+def rebuild():
+    """从当前生效报价全量重建环比与指数缓存。
+
+    重建在单个事务内完成：失败回滚、旧缓存仍可读；成功后页面只读到新快照。
+    """
+    conn = _conn()
+    try:
+        result = calc.rebuild_cache(conn)
+    except calc.RebuildError as exc:
+        log.warning("重建被跳过：%s", exc)
+        flash(str(exc), "error")
+    except Exception:
+        log.exception("重建失败，已回滚，原缓存保持不变")
+        flash("重建失败，已回滚，原有指数缓存保持不变，可重试", "error")
+    else:
+        flash(
+            f"已从现行报价重建缓存：基月 {result['base_month']}，"
+            f"共 {len(result['months'])} 个月（代际 {result['generation']}）",
+            "success",
+        )
+    return redirect(url_for("main.home"))
 
 
 @bp.post("/upload")

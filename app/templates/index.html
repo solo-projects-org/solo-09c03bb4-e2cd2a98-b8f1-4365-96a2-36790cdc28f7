@@ -23,6 +23,19 @@
       {% endif %}
     {% endwith %}
 
+    {% if cache_stale %}
+    <section class="card cache-warn">
+      <h2>指数缓存需要重建</h2>
+      <p class="hint">
+        当前缓存来自旧版本（缓存版本：{{ cache_version or '旧版' }}）。读数仍可查看，
+        但建议从现行报价全量重建环比与指数；重建在单事务内完成，失败会保留原缓存，可重试。
+      </p>
+      <form method="post" action="{{ url_for('main.rebuild') }}">
+        <button type="submit">立即重建缓存</button>
+      </form>
+    </section>
+    {% endif %}
+
     <section class="card">
       <h2>上传单月报价</h2>
       <form method="post" action="{{ url_for('main.upload') }}" enctype="multipart/form-data">
@@ -44,19 +57,38 @@
         <form method="post" action="{{ url_for('main.run_demo', action='break') }}"><button>换掉 2025-03（制造断链）</button></form>
         <form method="post" action="{{ url_for('main.run_demo', action='repair') }}"><button>恢复 2025-03 原报价</button></form>
         <form method="post" action="{{ url_for('main.run_demo', action='correct') }}"><button>更正 2025-02 的 A-01 报价 +20%</button></form>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>演示：指数连跌归零后回升</h2>
+      <div class="buttons">
+        <form method="post" action="{{ url_for('main.run_demo', action='plunge') }}"><button>连跌演示（指数归零）</button></form>
+        <form method="post" action="{{ url_for('main.run_demo', action='recover') }}"><button>连月回升（指数恢复 100）</button></form>
         <form method="post" action="{{ url_for('main.run_demo', action='reset') }}"
               onsubmit="return confirm('将删除全部报价与指数（包括手工上传的数据），确定？')">
           <button class="danger">清空全部数据</button>
         </form>
       </div>
-      <p class="hint">「清空全部数据」会删除数据库里的所有报价与指数，谨慎操作。</p>
+      <p class="hint">
+        连跌阶段月环比 0.01，指数跌破两位小数后页面显示 0.00；计算全程保留全精度对数链，
+        回升阶段月环比 100，指数可正确恢复，不会永久卡在 0.00。
+      </p>
     </section>
     {% endif %}
 
     <section class="card">
       <div class="card-head">
         <h2>价格指数</h2>
-        {% if rows %}<a class="link" href="{{ url_for('main.download_index') }}">下载 CSV</a>{% endif %}
+        <div class="links">
+          {% if rows %}<a class="link" href="{{ url_for('main.download_index') }}">下载 CSV</a>{% endif %}
+          <form method="post" action="{{ url_for('main.rebuild') }}" class="inline-form">
+            <button class="link-button" type="submit"
+                    title="从当前生效报价全量重建环比与指数（单事务，失败保留原缓存）">
+              重建缓存
+            </button>
+          </form>
+        </div>
       </div>
       {% if not rows %}
         <p class="empty">还没有可用的指数，请先上传基月报价。</p>
@@ -65,6 +97,7 @@
           基月 <strong>{{ base_month }}</strong>
           · 最新报价月 <strong>{{ latest_month }}</strong>
           · 共 {{ rows|length }} 个月
+          · 缓存代际 <strong>{{ cache_generation or '—' }}</strong>
         </p>
         <table>
           <thead>

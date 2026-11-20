@@ -46,13 +46,18 @@ CREATE INDEX IF NOT EXISTS idx_prices_month ON prices(month);
 CREATE INDEX IF NOT EXISTS idx_prices_key ON prices(month, stall, item);
 
 -- 指数结果缓存。查询指数只读此表。
+-- mom_factor / index_value 保存全精度数值（不在计算过程中舍入）；
+-- factor_log / index_log 保存对数空间的连乘状态，即使指数本身小于
+-- 浮点数能表示的最小正数（下溢为 0），对数链仍然有效，回升后可还原正确指数。
 CREATE TABLE IF NOT EXISTS index_months (
     month              TEXT PRIMARY KEY,
     is_base_month      INTEGER NOT NULL DEFAULT 0,
     has_upload         INTEGER NOT NULL DEFAULT 0,  -- 该月是否有已提交报价
     pair_count         INTEGER,              -- NULL = 断链或无报价
-    mom_factor         REAL,                 -- 环比系数
-    index_value        REAL,                 -- NULL = 留空
+    mom_factor         REAL,                 -- 环比系数（全精度算术平均）
+    factor_log         REAL,                 -- 环比系数的自然对数，供对数连乘
+    index_value        REAL,                 -- 指数最佳努力值（下溢/上溢时为 NULL）
+    index_log          REAL,                 -- 指数自然对数，连乘的唯一真源
     source_upload_id   INTEGER REFERENCES uploads(id) ON DELETE SET NULL,
     computed_at        TEXT NOT NULL
 );
@@ -78,8 +83,22 @@ def init_db(database: str | Path) -> None:
     conn = connect(database)
     try:
         conn.executescript(SCHEMA)
+        migrate(conn)
     finally:
         conn.close()
+
+
+def migrate(conn: sqlite3.Connection) -> list[str]:
+    """旧库结构升级：补齐对数链列。幂等，返回本次新增的列名。"""
+    existing = {
+        r["name"] for r in conn.execute("PRAGMA table_info(index_months)").fetchall()
+    }
+    added: list[str] = []
+    for column in ("factor_log", "index_log"):
+        if column not in existing:
+            conn.execute(f"ALTER TABLE index_months ADD COLUMN {column} REAL")
+            added.append(column)
+    return added
 
 
 @contextmanager
@@ -154,16 +173,18 @@ def upsert_index_rows(
     conn.executemany(
         """
         INSERT INTO index_months
-            (month, is_base_month, has_upload, pair_count, mom_factor, index_value,
-             source_upload_id, computed_at)
+            (month, is_base_month, has_upload, pair_count, mom_factor, factor_log,
+             index_value, index_log, source_upload_id, computed_at)
         VALUES (:month, :is_base_month, :has_upload, :pair_count, :mom_factor,
-                :index_value, :source_upload_id, :computed_at)
+                :factor_log, :index_value, :index_log, :source_upload_id, :computed_at)
         ON CONFLICT(month) DO UPDATE SET
             is_base_month    = excluded.is_base_month,
             has_upload       = excluded.has_upload,
             pair_count       = excluded.pair_count,
             mom_factor       = excluded.mom_factor,
+            factor_log       = excluded.factor_log,
             index_value      = excluded.index_value,
+            index_log        = excluded.index_log,
             source_upload_id = excluded.source_upload_id,
             computed_at      = excluded.computed_at
         """,

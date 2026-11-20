@@ -49,6 +49,19 @@ main {
 .card-head h2 { margin-bottom: 12px; }
 .link { color: var(--accent); text-decoration: none; font-size: 14px; }
 .link:hover { text-decoration: underline; }
+.links { display: flex; align-items: center; gap: 14px; }
+.inline-form { display: inline; }
+.link-button {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  font-size: 14px;
+  text-decoration: none;
+}
+.link-button:hover { text-decoration: underline; filter: none; }
+.cache-warn { border-color: var(--warn); background: var(--warn-soft); }
+.cache-warn h2 { color: var(--warn); }
 
 form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 input[type=file] { flex: 1 1 280px; padding: 7px; border: 1px dashed var(--line); border-radius: 8px; background: #fafbfa; }

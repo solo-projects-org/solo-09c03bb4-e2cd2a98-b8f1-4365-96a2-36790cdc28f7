@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY run.py .
+COPY rebuild_cache.py .
 COPY gunicorn.conf.py .
 COPY samples ./samples
 

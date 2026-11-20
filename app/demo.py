@@ -34,13 +34,20 @@ BASE_PRICES = {
     ("B-01", "西红柿"): 6.00,
 }
 
-BREAK_STALLS = ["X-01", "Y-01"]
 BREAK_PRICES = {
     ("X-01", "大白菜"): 5.10,
     ("X-01", "土豆"): 4.05,
     ("Y-01", "西红柿"): 7.25,
 }
 
+# --- 指数连跌后回升演示（验证下溢为 0.00 后仍能恢复） ---
+PLUNGE_STALL = "A-01"
+PLUNGE_ITEM = "土豆"
+PLUNGE_BASE_PRICE = 1.0
+DROP_FACTOR = 0.01      # 连跌 5 个月，月环比 0.01
+RISE_FACTOR = 100.0     # 连涨 5 个月，月环比 100
+PLUNGE_MONTHS = ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06"]
+RECOVER_MONTHS = ["2025-07", "2025-08", "2025-09", "2025-10", "2025-11"]
 
 
 class DemoError(Exception):
@@ -78,6 +85,18 @@ def _upload(conn, month: str, layout: str = "normal") -> None:
     services.process_upload(conn, raw, f"demo-{month}-{layout}.csv")
 
 
+def _single_row_csv(month: str, price: float) -> bytes:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["月份", "摊位", "品种", "每公斤报价"])
+    writer.writerow([month, PLUNGE_STALL, PLUNGE_ITEM, repr(price)])
+    return buf.getvalue().encode("utf-8")
+
+
+def _upload_single(conn, month: str, price: float, tag: str) -> None:
+    services.process_upload(conn, _single_row_csv(month, price), f"demo-{tag}-{month}.csv")
+
+
 def reset(conn) -> None:
     with db.transaction(conn):
         conn.execute("DELETE FROM prices")
@@ -105,6 +124,42 @@ def run(action: str, conn) -> str:
     if action == "reset":
         reset(conn)
         return "演示数据已清空，可重新载入示例。"
+
+    if action == "plunge":
+        # 连跌 5 个月（环比 0.01）：旧算法在 0.00001 后舍入/下溢为 0，
+        # 之后即使回升也只显示 0.00；对数链保留全精度，回升可正确还原。
+        reset(conn)
+        price = PLUNGE_BASE_PRICE
+        for index, month in enumerate(PLUNGE_MONTHS):
+            if index > 0:
+                price *= DROP_FACTOR
+            _upload_single(conn, month, price, "plunge")
+        return (
+            "已载入连跌行情（1–6 月，月环比 0.01）：指数跌破两位小数，"
+            "页面显示 0.00，但全精度对数链仍在；接着点「连月回升」验证恢复。"
+        )
+
+    if action == "recover":
+        base = services.base_month(conn)
+        if base != PLUNGE_MONTHS[0]:
+            raise DemoError("请先点「连跌演示（指数归零）」再做回升演示")
+        have = {
+            r["month"]
+            for r in conn.execute("SELECT DISTINCT month FROM uploads").fetchall()
+        }
+        if "2025-06" not in have:
+            raise DemoError("连跌数据不完整，请重新点「连跌演示（指数归零）」")
+        if "2025-07" in have:
+            raise DemoError("回升数据已存在（可重新点「连跌演示」重置）")
+        last_price = PLUNGE_BASE_PRICE * DROP_FACTOR ** (len(PLUNGE_MONTHS) - 1)
+        price = last_price
+        for month in RECOVER_MONTHS:
+            price *= RISE_FACTOR
+            _upload_single(conn, month, price, "recover")
+        return (
+            "已连续回升 5 个月（月环比 100）：指数从 0.00 恢复到 100.00，"
+            "证明下溢后对数链仍能算出正确指数。"
+        )
 
     if action == "load":
         reset(conn)
